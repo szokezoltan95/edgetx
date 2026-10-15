@@ -78,21 +78,50 @@ USBD_HandleTypeDef hUsbDevice;
 
 #if defined(RADIO_TX16SMK3) && !defined(BOOT)
 static constexpr uint16_t PC_FEEDBACK_REPORT_SIZE = 8;
-// USB control reports arrive from the host independently of the main-loop
-// cadence. Keep a FIFO so a new feature report cannot overwrite one that
-// usbProcessPcFeedback() has not consumed yet.
+static constexpr uint16_t PC_FEEDBACK_FRAME_REPORT_SIZE = 80;
+// Legacy single-command reports remain FIFO ordered.
 static constexpr uint8_t PC_FEEDBACK_QUEUE_SIZE = 32;
 static volatile uint8_t
     pcFeedbackReportQueue[PC_FEEDBACK_QUEUE_SIZE][PC_FEEDBACK_REPORT_SIZE];
 static volatile uint8_t pcFeedbackQueueHead = 0;
 static volatile uint8_t pcFeedbackQueueTail = 0;
+// Animation frames use a latest-frame mailbox: intermediate frames may be
+// skipped, but stale LED states can never build up behind the current state.
+static volatile uint8_t
+    pcFeedbackFrame[PC_FEEDBACK_FRAME_REPORT_SIZE];
+static volatile bool pcFeedbackFramePending = false;
 static bool pcFeedbackSessionActive = false;
 static constexpr tmr10ms_t PC_FEEDBACK_TIMEOUT_10MS = 500;
 static tmr10ms_t pcFeedbackLastActivity = 0;
 
 extern "C" void usbHidFeatureReportReceived(const uint8_t* data, uint16_t len)
 {
-  if (data == nullptr || len != PC_FEEDBACK_REPORT_SIZE) return;
+  if (data == nullptr) return;
+
+  if (len == PC_FEEDBACK_FRAME_REPORT_SIZE && data[0] == 1 && data[1] == 4) {
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    for (uint16_t i = 0; i < PC_FEEDBACK_FRAME_REPORT_SIZE; ++i) {
+      pcFeedbackFrame[i] = data[i];
+    }
+    pcFeedbackFramePending = true;
+    // A complete frame supersedes any older queued single-LED updates.
+    pcFeedbackQueueTail = pcFeedbackQueueHead;
+    __set_PRIMASK(primask);
+    return;
+  }
+
+  if (len != PC_FEEDBACK_REPORT_SIZE &&
+      len != PC_FEEDBACK_FRAME_REPORT_SIZE) return;
+
+  // A release received after a frame cancels that pending frame, preserving
+  // command order when the host stops an animation.
+  if (data[0] == 1 && data[1] == 2 && data[2] == 2) {
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    pcFeedbackFramePending = false;
+    __set_PRIMASK(primask);
+  }
 
   uint8_t head = pcFeedbackQueueHead;
   uint8_t next = static_cast<uint8_t>(head + 1);
@@ -116,6 +145,7 @@ void usbProcessPcFeedback()
       pcFeedbackSessionActive = false;
     }
     pcFeedbackQueueTail = pcFeedbackQueueHead;
+    pcFeedbackFramePending = false;
     pcFeedbackLastActivity = 0;
     return;
   }
@@ -128,10 +158,26 @@ void usbProcessPcFeedback()
     pcFeedbackLastActivity = 0;
   }
 
-  uint8_t report[PC_FEEDBACK_REPORT_SIZE];
+  uint8_t frame[PC_FEEDBACK_FRAME_REPORT_SIZE];
   uint32_t primask = __get_PRIMASK();
   __disable_irq();
 
+  if (pcFeedbackFramePending) {
+    for (uint16_t i = 0; i < PC_FEEDBACK_FRAME_REPORT_SIZE; ++i) {
+      frame[i] = pcFeedbackFrame[i];
+    }
+    pcFeedbackFramePending = false;
+    __set_PRIMASK(primask);
+
+    if (frame[0] == 1 && frame[1] == 4 &&
+        rgbSetPcLedOverrideFrame(&frame[2], 26)) {
+      pcFeedbackLastActivity = get_tmr10ms();
+      pcFeedbackSessionActive = true;
+    }
+    return;
+  }
+
+  uint8_t report[PC_FEEDBACK_REPORT_SIZE];
   uint8_t tail = pcFeedbackQueueTail;
   if (tail == pcFeedbackQueueHead) {
     __set_PRIMASK(primask);
