@@ -42,6 +42,7 @@ void rgbLedColorApply();
 void rgbSetBlingOverride(uint8_t r, uint8_t g, uint8_t b);
 void rgbClearBlingOverride();
 bool rgbSetPcLedOverride(uint8_t led, uint8_t r, uint8_t g, uint8_t b);
+bool rgbSetPcLedOverrideFrame(const uint8_t* rgb, uint16_t led_count);
 void rgbClearPcLedOverride(uint8_t led);
 void rgbClearPcOverrides();
 #endif
