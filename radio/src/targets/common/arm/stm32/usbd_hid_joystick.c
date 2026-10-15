@@ -27,11 +27,13 @@
 #endif
 
 #if defined(USBJ_EX) && defined(RADIO_TX16SMK3)
-#define HID_PC_FEEDBACK_REPORT_SIZE 8U
+#define HID_PC_FEEDBACK_COMMAND_REPORT_SIZE 8U
+#define HID_PC_FEEDBACK_FRAME_REPORT_SIZE 80U
 #define HID_PC_FEEDBACK_SET_REPORT 0x09U
 #define HID_PC_FEEDBACK_REPORT_VALUE 0x0300U
 
-static uint8_t HID_PC_FeatureReport[HID_PC_FEEDBACK_REPORT_SIZE];
+static uint8_t HID_PC_FeatureReport[HID_PC_FEEDBACK_FRAME_REPORT_SIZE];
+static uint16_t HID_PC_FeatureReportPendingSize;
 static uint8_t HID_PC_FeatureReportPending;
 #endif
 
@@ -411,8 +413,11 @@ static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *re
 
 #if defined(USBJ_EX) && defined(RADIO_TX16SMK3)
     case HID_PC_FEEDBACK_SET_REPORT:
-      if ((req->wValue != HID_PC_FEEDBACK_REPORT_VALUE) ||
-          (req->wLength != HID_PC_FEEDBACK_REPORT_SIZE)) {
+      if (req->wValue == HID_PC_FEEDBACK_REPORT_VALUE &&
+          (req->wLength == HID_PC_FEEDBACK_COMMAND_REPORT_SIZE ||
+           req->wLength == HID_PC_FEEDBACK_FRAME_REPORT_SIZE)) {
+        HID_PC_FeatureReportPendingSize = req->wLength;
+      } else {
         USBD_CtlError(pdev, req);
         ret = USBD_FAIL;
         break;
@@ -420,7 +425,7 @@ static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *re
 
       HID_PC_FeatureReportPending = 1U;
       (void)USBD_CtlPrepareRx(
-          pdev, HID_PC_FeatureReport, HID_PC_FEEDBACK_REPORT_SIZE);
+          pdev, HID_PC_FeatureReport, req->wLength);
       break;
 #endif
 
@@ -653,7 +658,7 @@ static uint8_t USBD_HID_EP0_RxReady(USBD_HandleTypeDef *pdev)
 {
   if (HID_PC_FeatureReportPending != 0U) {
     usbHidFeatureReportReceived(
-        HID_PC_FeatureReport, HID_PC_FEEDBACK_REPORT_SIZE);
+        HID_PC_FeatureReport, HID_PC_FeatureReportPendingSize);
     HID_PC_FeatureReportPending = 0U;
   }
 
