@@ -1,8 +1,12 @@
 # TX16S MK3 PC LED HID protocol
 
 The PC feedback interface is an unnumbered HID Feature report with an
-8-byte firmware payload. HIDAPI prepends report ID `0` on the host, so its
-write buffer has 9 bytes total.
+80-byte firmware payload. HIDAPI prepends report ID `0` on the host, so its
+write buffer has 81 bytes total. Send all 80 payload bytes even for legacy
+commands; bytes not used by a command are zero-filled. The firmware also
+accepts an 8-byte legacy payload for older tools on hosts that permit it.
+
+Legacy command fields:
 
 | Byte | Meaning |
 | --- | --- |
@@ -22,6 +26,7 @@ Commands:
 | 1 | Set color | Sets a uniform ring override or one physical LED override, based on target. |
 | 2 | Release | Releases the selected ring, individual LED, or all PC LED overrides. |
 | 3 | Keepalive | Renews the active override session timeout. |
+| 4 | Set frame | Replaces the PC color override for all 26 LEDs from bytes 2..79. |
 
 Targets:
 
@@ -37,5 +42,12 @@ firmware's current color. Individual LED overrides take priority over the
 uniform ring override. Releasing the ring leaves individual LED overrides in
 place; releasing all clears both kinds.
 
-Overrides expire after 5 seconds without a Set color or Keepalive command.
+`Set frame` uses bytes 2..79 as 26 consecutive `(red, green, blue)` triples.
+The frame replaces the entire per-LED override state and is applied as one RGB
+update. The firmware keeps only the newest pending frame, so animation frames
+that arrive faster than the radio refreshes LEDs are skipped instead of queued
+for delayed playback.
+
+Overrides expire after 5 seconds without a Set color, Set frame, or Keepalive
+command.
 The normal joystick HID input report is unchanged.
