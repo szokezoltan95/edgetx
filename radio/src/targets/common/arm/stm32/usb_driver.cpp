@@ -78,8 +78,14 @@ USBD_HandleTypeDef hUsbDevice;
 
 #if defined(RADIO_TX16SMK3) && !defined(BOOT)
 static constexpr uint16_t PC_FEEDBACK_REPORT_SIZE = 8;
-static volatile uint8_t pcFeedbackReport[PC_FEEDBACK_REPORT_SIZE];
-static volatile bool pcFeedbackReportPending = false;
+// USB control reports arrive from the host independently of the main-loop
+// cadence. Keep a FIFO so a new feature report cannot overwrite one that
+// usbProcessPcFeedback() has not consumed yet.
+static constexpr uint8_t PC_FEEDBACK_QUEUE_SIZE = 32;
+static volatile uint8_t
+    pcFeedbackReportQueue[PC_FEEDBACK_QUEUE_SIZE][PC_FEEDBACK_REPORT_SIZE];
+static volatile uint8_t pcFeedbackQueueHead = 0;
+static volatile uint8_t pcFeedbackQueueTail = 0;
 static bool pcFeedbackSessionActive = false;
 static constexpr tmr10ms_t PC_FEEDBACK_TIMEOUT_10MS = 500;
 static tmr10ms_t pcFeedbackLastActivity = 0;
@@ -88,10 +94,18 @@ extern "C" void usbHidFeatureReportReceived(const uint8_t* data, uint16_t len)
 {
   if (data == nullptr || len != PC_FEEDBACK_REPORT_SIZE) return;
 
+  uint8_t head = pcFeedbackQueueHead;
+  uint8_t next = static_cast<uint8_t>(head + 1);
+  if (next == PC_FEEDBACK_QUEUE_SIZE) next = 0;
+
+  // Leave one slot empty to distinguish full from empty. If a burst ever
+  // exceeds the queue, reject the newest report instead of corrupting order.
+  if (next == pcFeedbackQueueTail) return;
+
   for (uint16_t i = 0; i < PC_FEEDBACK_REPORT_SIZE; ++i) {
-    pcFeedbackReport[i] = data[i];
+    pcFeedbackReportQueue[head][i] = data[i];
   }
-  pcFeedbackReportPending = true;
+  pcFeedbackQueueHead = next;
 }
 
 void usbProcessPcFeedback()
@@ -101,7 +115,7 @@ void usbProcessPcFeedback()
       rgbClearPcOverrides();
       pcFeedbackSessionActive = false;
     }
-    pcFeedbackReportPending = false;
+    pcFeedbackQueueTail = pcFeedbackQueueHead;
     pcFeedbackLastActivity = 0;
     return;
   }
@@ -114,21 +128,21 @@ void usbProcessPcFeedback()
     pcFeedbackLastActivity = 0;
   }
 
-  if (!pcFeedbackReportPending) return;
-
   uint8_t report[PC_FEEDBACK_REPORT_SIZE];
   uint32_t primask = __get_PRIMASK();
   __disable_irq();
 
-  if (!pcFeedbackReportPending) {
+  uint8_t tail = pcFeedbackQueueTail;
+  if (tail == pcFeedbackQueueHead) {
     __set_PRIMASK(primask);
     return;
   }
 
   for (uint16_t i = 0; i < PC_FEEDBACK_REPORT_SIZE; ++i) {
-    report[i] = pcFeedbackReport[i];
+    report[i] = pcFeedbackReportQueue[tail][i];
   }
-  pcFeedbackReportPending = false;
+  if (++tail == PC_FEEDBACK_QUEUE_SIZE) tail = 0;
+  pcFeedbackQueueTail = tail;
   __set_PRIMASK(primask);
 
   constexpr uint8_t PROTOCOL_VERSION = 1;
