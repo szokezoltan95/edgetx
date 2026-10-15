@@ -217,6 +217,21 @@ bool rgbSetPcLedOverride(uint8_t led, uint8_t r, uint8_t g, uint8_t b)
   return true;
 }
 
+bool rgbSetPcLedOverrideFrame(const uint8_t* rgb, uint16_t led_count)
+{
+  if (rgb == nullptr || led_count != LED_STRIP_LENGTH) return false;
+
+  _begin_batch();
+  for (uint16_t led = 0; led < LED_STRIP_LENGTH; ++led) {
+    const uint16_t offset = led * 3;
+    _pc_led_overrides[led] = BLING_OVERRIDE_ACTIVE |
+        (uint32_t(rgb[offset]) << 16) |
+        (uint32_t(rgb[offset + 1]) << 8) | rgb[offset + 2];
+  }
+  rgbLedColorApply();
+  return true;
+}
+
 void rgbClearPcLedOverride(uint8_t led)
 {
   if (led >= LED_STRIP_LENGTH) return;
