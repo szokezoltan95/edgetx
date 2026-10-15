@@ -80,7 +80,7 @@ USBD_HandleTypeDef hUsbDevice;
 static constexpr uint16_t PC_FEEDBACK_REPORT_SIZE = 8;
 static volatile uint8_t pcFeedbackReport[PC_FEEDBACK_REPORT_SIZE];
 static volatile bool pcFeedbackReportPending = false;
-static bool pcFeedbackOverrideActive = false;
+static bool pcFeedbackSessionActive = false;
 static constexpr tmr10ms_t PC_FEEDBACK_TIMEOUT_10MS = 500;
 static tmr10ms_t pcFeedbackLastActivity = 0;
 
@@ -97,20 +97,20 @@ extern "C" void usbHidFeatureReportReceived(const uint8_t* data, uint16_t len)
 void usbProcessPcFeedback()
 {
   if (!usbPluggedInJoystickMode()) {
-    if (pcFeedbackOverrideActive) {
-      rgbClearBlingOverride();
-      pcFeedbackOverrideActive = false;
+    if (pcFeedbackSessionActive) {
+      rgbClearPcOverrides();
+      pcFeedbackSessionActive = false;
     }
     pcFeedbackReportPending = false;
     pcFeedbackLastActivity = 0;
     return;
   }
 
-  if (pcFeedbackOverrideActive &&
+  if (pcFeedbackSessionActive &&
       (tmr10ms_t)(get_tmr10ms() - pcFeedbackLastActivity) >=
           PC_FEEDBACK_TIMEOUT_10MS) {
-    rgbClearBlingOverride();
-    pcFeedbackOverrideActive = false;
+    rgbClearPcOverrides();
+    pcFeedbackSessionActive = false;
     pcFeedbackLastActivity = 0;
   }
 
@@ -136,29 +136,39 @@ void usbProcessPcFeedback()
   constexpr uint8_t COMMAND_RELEASE = 2;
   constexpr uint8_t COMMAND_KEEPALIVE = 3;
   constexpr uint8_t TARGET_GIMBAL_RINGS = 0;
+  constexpr uint8_t TARGET_INDIVIDUAL_LED = 1;
+  constexpr uint8_t TARGET_ALL = 2;
 
-  if (report[0] != PROTOCOL_VERSION ||
-      report[2] != TARGET_GIMBAL_RINGS) {
-    return;
-  }
+  if (report[0] != PROTOCOL_VERSION || report[2] > TARGET_ALL) return;
 
   switch (report[1]) {
     case COMMAND_SET_COLOR:
-      rgbSetBlingOverride(report[3], report[4], report[5]);
+      if (report[2] == TARGET_GIMBAL_RINGS) {
+        rgbSetBlingOverride(report[3], report[4], report[5]);
+      } else if (report[2] == TARGET_INDIVIDUAL_LED) {
+        if (!rgbSetPcLedOverride(report[6], report[3], report[4], report[5])) {
+          return;
+        }
+      } else {
+        return;
+      }
       pcFeedbackLastActivity = get_tmr10ms();
-      pcFeedbackOverrideActive = true;
+      pcFeedbackSessionActive = true;
       break;
 
     case COMMAND_RELEASE:
-      if (pcFeedbackOverrideActive) {
+      if (report[2] == TARGET_GIMBAL_RINGS) {
         rgbClearBlingOverride();
-        pcFeedbackOverrideActive = false;
+      } else if (report[2] == TARGET_INDIVIDUAL_LED) {
+        rgbClearPcLedOverride(report[6]);
+      } else {
+        rgbClearPcOverrides();
       }
-      pcFeedbackLastActivity = 0;
+      if (pcFeedbackSessionActive) pcFeedbackLastActivity = get_tmr10ms();
       break;
 
     case COMMAND_KEEPALIVE:
-      if (pcFeedbackOverrideActive) {
+      if (pcFeedbackSessionActive) {
         pcFeedbackLastActivity = get_tmr10ms();
       }
       break;

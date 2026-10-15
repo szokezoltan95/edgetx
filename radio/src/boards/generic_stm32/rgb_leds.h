@@ -41,6 +41,9 @@ void rgbLedColorApply();
 #if defined(BLING_LED_STRIP_LENGTH) && (BLING_LED_STRIP_LENGTH > 0)
 void rgbSetBlingOverride(uint8_t r, uint8_t g, uint8_t b);
 void rgbClearBlingOverride();
+bool rgbSetPcLedOverride(uint8_t led, uint8_t r, uint8_t g, uint8_t b);
+void rgbClearPcLedOverride(uint8_t led);
+void rgbClearPcOverrides();
 #endif
 
 // Weak hook invoked by the LED refresh timer task before publishing the

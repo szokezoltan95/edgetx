@@ -46,6 +46,7 @@ static uint8_t _back_colors[RGBLEDS_BYTES_PER_LED * LED_STRIP_LENGTH];
 #if defined(BLING_LED_STRIP_LENGTH) && (BLING_LED_STRIP_LENGTH > 0)
 static constexpr uint32_t BLING_OVERRIDE_ACTIVE = 0x01000000u;
 static volatile uint32_t _bling_override = 0;
+static volatile uint32_t _pc_led_overrides[LED_STRIP_LENGTH] = {};
 #endif
 
 // Seqlock-style publish using a single counter:
@@ -97,6 +98,17 @@ static void _flush_and_update()
         for (uint8_t led = BLING_LED_STRIP_START;
              led < BLING_LED_STRIP_START + BLING_LED_STRIP_LENGTH; ++led) {
           rgbleds_set_color_in_buf(_led_colors, led, r, g, b);
+        }
+      }
+
+      // Per-LED PC overrides take precedence over the uniform ring color.
+      // This also lets the PC address the six LEDs outside the rings (0..5).
+      for (uint16_t led = 0; led < LED_STRIP_LENGTH; ++led) {
+        uint32_t color = _pc_led_overrides[led];
+        if ((color & BLING_OVERRIDE_ACTIVE) != 0u) {
+          rgbleds_set_color_in_buf(
+              _led_colors, led, uint8_t((color >> 16) & 0xffu),
+              uint8_t((color >> 8) & 0xffu), uint8_t(color & 0xffu));
         }
       }
 #endif
@@ -191,6 +203,36 @@ void rgbClearBlingOverride()
 {
   _bling_override = 0;
   _begin_batch();
+  rgbLedColorApply();
+}
+
+bool rgbSetPcLedOverride(uint8_t led, uint8_t r, uint8_t g, uint8_t b)
+{
+  if (led >= LED_STRIP_LENGTH) return false;
+
+  _begin_batch();
+  _pc_led_overrides[led] = BLING_OVERRIDE_ACTIVE | (uint32_t(r) << 16) |
+                           (uint32_t(g) << 8) | b;
+  rgbLedColorApply();
+  return true;
+}
+
+void rgbClearPcLedOverride(uint8_t led)
+{
+  if (led >= LED_STRIP_LENGTH) return;
+
+  _begin_batch();
+  _pc_led_overrides[led] = 0;
+  rgbLedColorApply();
+}
+
+void rgbClearPcOverrides()
+{
+  _bling_override = 0;
+  _begin_batch();
+  for (uint16_t led = 0; led < LED_STRIP_LENGTH; ++led) {
+    _pc_led_overrides[led] = 0;
+  }
   rgbLedColorApply();
 }
 #endif
